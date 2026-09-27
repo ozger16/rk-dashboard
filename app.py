@@ -79,10 +79,7 @@ def siparisleri_getir(baslangic_dt, bitis_dt):
     url = f"https://api.trendyol.com/sapigw/suppliers/{SUPPLIER_ID}/orders"
     tum_siparisler = []
     
-    # 🎯 KRİTİK DÜZELTME 2: Ağı ±24 saat genişletiyoruz!
-    # API, siparişleri CreatedDate'e (Trendyol'a düşme anı) göre getirir. 
-    # Müşterinin sipariş verdiği saat (orderDate) ile sistem onayı (CreatedDate) 
-    # arasında gün kaymaları olabilir. Hepsini yakalamak için 1 gün öncesi ve sonrasını tarayalım.
+    # Tarih sınırlarında kayıp yaşanmaması için ±24 saat genişletilmiş aralık
     api_baslangic = baslangic_dt - timedelta(hours=24)
     api_bitis = bitis_dt + timedelta(hours=24)
     
@@ -163,10 +160,11 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
         siparis_tarih_ms = siparis.get("orderDate")
         
         if siparis_tarih_ms:
-            # Doğrudan Türkiye Saat Dilimine çevriliyor
-            siparis_dt = datetime.fromtimestamp(siparis_tarih_ms / 1000.0, tz=TR_TZ)
+            # 🎯 UTC Çevrimi ve TR Saat Dilimine Uyum (Saat Kaymalarını Önler)
+            siparis_dt_utc = datetime.fromtimestamp(siparis_tarih_ms / 1000.0, tz=timezone.utc)
+            siparis_dt = siparis_dt_utc.astimezone(TR_TZ)
             
-            # 🎯 Python Tarafında Hassas Filtreleme
+            # 🎯 Hassas Tarih Filtrelemesi
             if periyot == "Bugün (Canlı)":
                 if siparis_dt < baslangic_dt:
                     continue
@@ -175,10 +173,6 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
                     continue
                 
         status = siparis.get("status")
-        # DİKKAT: Sadece net gerçekleşenleri hesaplıyoruz.
-        # Eğer Trendyol panelindeki "Brüt Satış" (İptaller dahil) rakamını görmek istersen
-        # bu if bloğunu kaldırman veya ayrıca sayman gerekir. 
-        # Şu anki mantıkta "Net Satış" ve Kârlılığa odaklanıyoruz.
         if status in ["Cancelled", "UnSupplied"]:
             continue
             
@@ -309,7 +303,7 @@ with sekme1:
             
             kpi1.metric("📦 Sipariş Adedi (Net)", f"{ozet['net_siparis_adedi']}")
             kpi2.metric("🛍️ Satılan Ürün", f"{ozet['satilan_urun_adedi']}")
-            kpi3.metric("💳 Brüt Ciro (Net Siparişlerden)", f"{ozet['brut_ciro']:,.2f} ₺", help="İptaller HARİÇ geçerli siparişlerin toplam tutarı")
+            kpi3.metric("💳 Brüt Ciro", f"{ozet['brut_ciro']:,.2f} ₺", help="İptaller hariç net geçerli siparişlerin brüt toplamı")
             kpi4.metric("🏦 Hesaba Yatacak", f"{ozet['net_siparis_tutari']:,.2f} ₺", help="Trendyol kesintileri sonrası bankanıza gelecek para")
             kpi5.metric("💰 NET KÂR", f"{ozet['net_kar']:,.2f} ₺", help="Hesaba yatacak tutar eksi ürün alış maliyetiniz")
             
