@@ -59,10 +59,12 @@ def get_timestamps(periyot, baslangic_tarihi=None, bitis_tarihi=None):
         baslangic = dun.replace(hour=0, minute=0, second=0, microsecond=0)
         bitis = dun.replace(hour=23, minute=59, second=59, microsecond=999999)
     elif periyot == "Bu Hafta":
-        baslangic = (su_an - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        # Telegram botuyla aynı: Bugün dahil son 7 gün
+        baslangic = (su_an - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         bitis = su_an + timedelta(minutes=5)
     elif periyot == "Bu Ay":
-        baslangic = (su_an - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+        # Telegram botuyla aynı: Bugün dahil son 30 gün
+        baslangic = (su_an - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
         bitis = su_an + timedelta(minutes=5)
     elif periyot == "Özel Tarih" and baslangic_tarihi and bitis_tarihi:
         baslangic = datetime.combine(baslangic_tarihi, time.min).replace(tzinfo=TR_TZ)
@@ -71,41 +73,51 @@ def get_timestamps(periyot, baslangic_tarihi=None, bitis_tarihi=None):
         baslangic = su_an.replace(hour=0, minute=0, second=0, microsecond=0)
         bitis = su_an + timedelta(minutes=5)
         
-    start_ms = int(baslangic.timestamp() * 1000)
-    end_ms = int(bitis.timestamp() * 1000)
-    
     tarih_metni = f"{baslangic.strftime('%d.%m.%Y %H:%M:%S')} - {bitis.strftime('%d.%m.%Y %H:%M:%S')}"
     
-    return start_ms, end_ms, tarih_metni, baslangic, bitis
+    return baslangic, bitis, tarih_metni
 
-def siparisleri_getir(start_date, end_date):
+def siparisleri_getir(baslangic_dt, bitis_dt):
     url = f"https://api.trendyol.com/sapigw/suppliers/{SUPPLIER_ID}/orders"
     tum_siparisler = []
-    page = 0
     
-    while True:
-        params = {
-            "startDate": start_date, 
-            "endDate": end_date, 
-            "size": 100,
-            "page": page,
-            "orderByField": "CreatedDate",
-            "orderByDirection": "DESC"
-        }
-        response = requests.get(url, params=params, auth=(API_KEY, API_SECRET))
+    # Trendyol API 14 günden uzun sorguları reddettiği/kırptığı için 14'er günlük parçalara (chunk) bölüyoruz
+    mevcut_bas = baslangic_dt
+    while mevcut_bas < bitis_dt:
+        mevcut_bit = mevcut_bas + timedelta(days=14)
+        if mevcut_bit > bitis_dt:
+            mevcut_bit = bitis_dt
+            
+        start_ms = int(mevcut_bas.timestamp() * 1000)
+        end_ms = int(mevcut_bit.timestamp() * 1000)
+        page = 0
         
-        if response.status_code == 200:
-            data = response.json()
-            icerik = data.get("content", [])
-            tum_siparisler.extend(icerik)
+        while True:
+            params = {
+                "startDate": start_ms, 
+                "endDate": end_ms, 
+                "size": 100,
+                "page": page,
+                "orderByField": "CreatedDate",
+                "orderByDirection": "DESC"
+            }
+            response = requests.get(url, params=params, auth=(API_KEY, API_SECRET))
             
-            if len(icerik) < 100:
+            if response.status_code == 200:
+                data = response.json()
+                icerik = data.get("content", [])
+                tum_siparisler.extend(icerik)
+                
+                if len(icerik) < 100:
+                    break
+                page += 1
+                time.sleep(0.05)
+            else:
                 break
-            page += 1
-        else:
-            st.error(f"Trendyol API Hatası! Kod: {response.status_code}")
-            break
-            
+                
+        mevcut_bas = mevcut_bit
+        time.sleep(0.05)
+        
     return tum_siparisler
 
 def telegram_mesaj_gonder(mesaj):
@@ -130,8 +142,8 @@ def telegram_mesaj_gonder(mesaj):
 # ==========================================
 # 2. KÂR VE PERFORMANS HESAPLAMA MOTORU
 # ==========================================
-def performansi_hesapla(start_ms, end_ms, baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
-    siparisler = siparisleri_getir(start_ms, end_ms)
+def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
+    siparisler = siparisleri_getir(baslangic_dt, bitis_dt)
     
     ozet = {
         "brut_ciro": 0.0, "net_siparis_tutari": 0.0, "net_kar": 0.0, 
@@ -139,8 +151,14 @@ def performansi_hesapla(start_ms, end_ms, baslangic_dt, bitis_dt, periyot, urun_
     }
     
     tablo_verileri = []
+    islenen_paketler = set()
     
     for siparis in siparisler:
+        s_id = siparis.get("id")
+        if s_id in islenen_paketler:
+            continue
+        islenen_paketler.add(s_id)
+
         siparis_tarih_ms = siparis.get("orderDate")
         
         if siparis_tarih_ms:
@@ -156,34 +174,44 @@ def performansi_hesapla(start_ms, end_ms, baslangic_dt, bitis_dt, periyot, urun_
                 if not (baslangic_dt <= siparis_dt <= bitis_dt):
                     continue
                 
-        if siparis.get("status") in ["Cancelled", "UnSupplied"]:
+        status = siparis.get("status")
+        if status in ["Cancelled", "UnSupplied"]:
             continue
             
         siparis_no = siparis.get("orderNumber")
         siparis_tarih_str = siparis_dt.strftime('%d.%m.%Y %H:%M:%S') if siparis_tarih_ms else "Bilinmiyor"
         
-        ozet["net_siparis_adedi"] += 1
-        
         siparis_satis_tutari = 0.0
         siparis_urun_maliyeti = 0.0
         siparis_komisyon_tutari = 0.0
         siparis_icindeki_urun_adeti = 0
+        gecerli_siparis = False
         
         for urun in siparis.get("lines", []):
+            # İade edilen ürünleri net satıştan ve hesaplamadan çıkarıyoruz
+            line_status = str(urun.get("orderLineStatusName", "")).lower()
+            if "iade" in line_status or "return" in line_status:
+                continue
+
             barkod = str(urun.get("barcode")).strip()
-            satis_fiyati = float(urun.get("price"))
-            adet = int(urun.get("quantity"))
+            satis_fiyati = float(urun.get("price", 0))
+            adet = int(urun.get("quantity", 1))
             
+            satir_tutari = satis_fiyati * adet
             siparis_icindeki_urun_adeti += adet
-            ozet["satilan_urun_adedi"] += adet
-            siparis_satis_tutari += (satis_fiyati * adet)
+            siparis_satis_tutari += satir_tutari
             
             if barkod in urun_maliyetleri:
                 veriler = urun_maliyetleri[barkod]
                 siparis_urun_maliyeti += (veriler["maliyet"] * adet)
-                siparis_komisyon_tutari += ((satis_fiyati * veriler["komisyon_orani"]) * adet)
+                siparis_komisyon_tutari += (satir_tutari * veriler["komisyon_orani"])
+            
+            gecerli_siparis = True
 
-        if siparis_icindeki_urun_adeti > 0:
+        if gecerli_siparis and siparis_icindeki_urun_adeti > 0:
+            ozet["net_siparis_adedi"] += 1
+            ozet["satilan_urun_adedi"] += siparis_icindeki_urun_adeti
+
             kargo_kesintisi = SABIT_KARGO_UCRETI
             platform_bedeli = siparis.get("platformServiceFee", SABIT_PLATFORM_BEDELI)
             
@@ -241,9 +269,8 @@ with st.sidebar:
     # TELEGRAM RAPOR BUTONU
     st.subheader("📱 Bildirimler")
     if st.button("📤 Telegram'a Özet Gönder", use_container_width=True):
-        # O an seçili periyodun özetini hesaplayıp gönderelim
-        s_ms, e_ms, t_metin, b_dt, bit_dt = get_timestamps(secilen_periyot, baslangic_tarihi, bitis_tarihi)
-        ozt, _ = performansi_hesapla(s_ms, e_ms, b_dt, bit_dt, secilen_periyot, URUN_MALIYETLERI)
+        b_dt, bit_dt, t_metin = get_timestamps(secilen_periyot, baslangic_tarihi, bitis_tarihi)
+        ozt, _ = performansi_hesapla(b_dt, bit_dt, secilen_periyot, URUN_MALIYETLERI)
         
         rapor_metni = (
             f"📊 *Trendyol {secilen_periyot} Raporu*\n\n"
@@ -266,11 +293,11 @@ with st.sidebar:
 
 if URUN_MALIYETLERI:
     try:
-        start_ms, end_ms, tarih_bilgisi, baslangic_dt, bitis_dt = get_timestamps(secilen_periyot, baslangic_tarihi, bitis_tarihi)
+        baslangic_dt, bitis_dt, tarih_bilgisi = get_timestamps(secilen_periyot, baslangic_tarihi, bitis_tarihi)
         
         st.sidebar.info(f"**Taranan Zaman Aralığı:**\n\n{tarih_bilgisi}")
         
-        ozet, tablo = performansi_hesapla(start_ms, end_ms, baslangic_dt, bitis_dt, secilen_periyot, URUN_MALIYETLERI)
+        ozet, tablo = performansi_hesapla(baslangic_dt, bitis_dt, secilen_periyot, URUN_MALIYETLERI)
         
         st.markdown("### 📊 Genel Özet")
         kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
