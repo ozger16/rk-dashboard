@@ -235,7 +235,7 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
 
 URUN_MALIYETLERI = maliyetleri_excelden_al("maliyetler.xlsx")
 
-sekme1, sekme2 = st.tabs(["📊 Canlı Performans Paneli", "💡 Trendyol Fiyat & Komisyon Simülatörü"])
+sekme1, sekme2 = st.tabs(["📊 Canlı Performans Paneli", "💡 Trendyol Komisyon & Fiyat Listesi"])
 
 with sekme1:
     col_baslik, col_buton = st.columns([4, 1])
@@ -318,89 +318,95 @@ with sekme1:
         st.warning("Lütfen maliyetler.xlsx dosyanızı hazırlayın.")
 
 # ==========================================
-# 3. TRENDYOL KOMİSYON EXCELİ DESTEKLİ SİMÜLATÖR
+# 3. TOPLU TRENDYOL KOMİSYON & FİYAT LİSTESİ
 # ==========================================
 with sekme2:
-    st.title("💡 Trendyol Fiyat & Komisyon Simülatörü")
-    st.markdown("Trendyol'dan indirdiğiniz **Komisyon Tarifeleri** Excel dosyasını yükleyerek tüm fiyat aralıklarını ve net kârınızı otomatik simüle edin.")
+    st.title("💡 Trendyol Komisyon & Fiyat Aralıkları Tablosu")
+    st.markdown("Trendyol'dan indirdiğiniz **Komisyon Tarifeleri** Excel dosyasını yükleyin; tüm ürünleriniz fiyat aralıkları ve net karlarıyla birlikte toplu halde listelensin.")
     
     trendyol_excel_dosyasi = st.file_uploader(
         "Trendyol Komisyon Tarifeleri Excel Dosyasını Yükle (.xlsx)", 
         type=["xlsx"],
-        key="ty_excel"
+        key="ty_excel_toplu"
     )
     
     if trendyol_excel_dosyasi is not None:
         try:
             ty_df = pd.read_excel(trendyol_excel_dosyasi)
-            st.success("✅ Trendyol komisyon raporu başarıyla yüklendi!")
+            st.success(f"✅ Başarıyla yüklendi! Toplam {len(ty_df)} ürün listeleniyor.")
             
-            # Ürün seçimi
-            barkod_listesi = ty_df['BARKOD'].astype(str).tolist()
-            urun_isimleri = ty_df['ÜRÜN İSMİ'].astype(str).tolist()
-            secenekler = [f"{b} - {i}" for b, i in zip(barkod_listesi, urun_isimleri)]
+            toplu_liste = []
+            hizmet_bedeli = SABIT_KARGO_UCRETI + SABIT_PLATFORM_BEDELI
             
-            secilen_secenek = st.selectbox("Simülasyon Yapılacak Ürünü Seçin", secenekler)
-            
-            if secilen_secenek:
-                secilen_barkod = secilen_secenek.split(" - ")[0]
-                urun_satiri = ty_df[ty_df['BARKOD'].astype(str) == secilen_barkod].iloc[0]
+            for index, row in ty_df.iterrows():
+                barkod = str(row.get('BARKOD', '')).strip()
+                urun_ismi = row.get('ÜRÜN İSMİ', 'Bilinmiyor')
+                beden = row.get('BEDEN', '-')
+                stok = row.get('STOK', 0)
                 
-                # Maliyeti bul
+                # Maliyeti al (Yoksa 0 kabul et)
                 maliyet = 0.0
-                if secilen_barkod in URUN_MALIYETLERI:
-                    maliyet = URUN_MALIYETLERI[secilen_barkod]["maliyet"]
+                if barkod in URUN_MALIYETLERI:
+                    maliyet = URUN_MALIYETLERI[barkod]["maliyet"]
                 
-                # Trendyol verilerini çek
-                guncel_tsf = float(urun_satiri.get('GÜNCEL TSF', 0))
-                guncel_kom = float(urun_satiri.get('GÜNCEL KOMİSYON', 0))
+                guncel_tsf = float(row.get('GÜNCEL TSF', 0))
                 
-                k1_fiyat = float(urun_satiri.get('KOMİSYONA ESAS FİYAT', guncel_tsf))
-                k1_kom = float(urun_satiri.get('1.KOMİSYON', guncel_kom)) / 100.0
+                # 4 Fiyat Kademesi ve Komisyonları
+                f1 = float(row.get('KOMİSYONA ESAS FİYAT', guncel_tsf))
+                k1 = float(row.get('1.KOMİSYON', 0)) / 100.0
                 
-                k2_fiyat = float(urun_satiri.get('2.Fiyat Alt Limit', guncel_tsf * 0.9))
-                k2_kom = float(urun_satiri.get('2.KOMİSYON', guncel_kom - 1)) / 100.0
+                f2 = float(row.get('2.Fiyat Alt Limit', 0))
+                k2 = float(row.get('2.KOMİSYON', 0)) / 100.0
                 
-                k3_fiyat = float(urun_satiri.get('3.Fiyat Alt Limit', guncel_tsf * 0.8))
-                k3_kom = float(urun_satiri.get('3.KOMİSYON', guncel_kom - 2)) / 100.0
+                f3 = float(row.get('3.Fiyat Alt Limit', 0))
+                k3 = float(row.get('3.KOMİSYON', 0)) / 100.0
                 
-                k4_fiyat = float(urun_satiri.get('4.Fiyat Üst Limiti', guncel_tsf * 0.7))
-                k4_kom = float(urun_satiri.get('4.KOMİSYON', guncel_kom - 3)) / 100.0
+                f4 = float(row.get('4.Fiyat Üst Limiti', 0))
+                k4 = float(row.get('4.KOMİSYON', 0)) / 100.0
                 
-                st.markdown("---")
-                st.info(f"📦 **Ürün:** {urun_satiri.get('ÜRÜN İSMİ')} | **Mevcut Alış Maliyeti:** **{maliyet:,.2f} ₺** (Eğer maliyet girilmediyse 0 alınır)")
+                # Kâr hesaplama fonksiyonu
+                def kar_hesapla(fiyat, kom):
+                    if fiyat <= 0:
+                        return 0.0, 0.0
+                    yatacak = fiyat - (fiyat * kom) - hizmet_bedeli
+                    kar = yatacak - maliyet
+                    return round(kar, 2), round(yatacak, 2)
                 
-                st.subheader("📊 Trendyol Fiyat Aralıkları ve Kâr Simülasyonu")
+                kar1, yat1 = kar_hesapla(f1, k1)
+                kar2, yat2 = kar_hesapla(f2, k2)
+                kar3, yat3 = kar_hesapla(f3, k3)
+                kar4, yat4 = kar_hesapla(f4, k4)
                 
-                def hesapla(fiyat, kom_orani):
-                    kom_tutar = fiyat * kom_orani
-                    hizmet = SABIT_KARGO_UCRETI + SABIT_PLATFORM_BEDELI
-                    yatacak = fiyat - kom_tutar - hizmet
-                    net_k = yatacak - maliyet
-                    marj = (net_k / fiyat * 100) if fiyat > 0 else 0
-                    return kom_tutar, yatacak, net_k, marj
-
-                s1_kom, s1_yat, s1_kar, s1_marj = hesapla(k1_fiyat, k1_kom)
-                s2_kom, s2_yat, s2_kar, s2_marj = hesapla(k2_fiyat, k2_kom)
-                s3_kom, s3_yat, s3_kar, s3_marj = hesapla(k3_fiyat, k3_kom)
-                s4_kom, s4_yat, s4_kar, s4_marj = hesapla(k4_fiyat, k4_kom)
-                
-                sim_tablo = pd.DataFrame({
-                    "Aralık / Senaryo": ["1. Fiyat Aralığı", "2. Fiyat Aralığı", "3. Fiyat Aralığı", "4. Fiyat Aralığı"],
-                    "Satış Fiyatı (TL)": [k1_fiyat, k2_fiyat, k3_fiyat, k4_fiyat],
-                    "Komisyon Oranı": [f"%{k1_kom*100:.1f}", f"%{k2_kom*100:.1f}", f"%{k3_kom*100:.1f}", f"%{k4_kom*100:.1f}"],
-                    "Komisyon Kesintisi (TL)": [round(s1_kom, 2), round(s2_kom, 2), round(s3_kom, 2), round(s4_kom, 2)],
-                    "Hesaba Yatacak (TL)": [round(s1_yat, 2), round(s2_yat, 2), round(s3_yat, 2), round(s4_yat, 2)],
-                    "Net Kâr (TL)": [round(s1_kar, 2), round(s2_kar, 2), round(s3_kar, 2), round(s4_kar, 2)],
-                    "Kâr Marjı": [f"%{s1_marj:.1f}", f"%{s2_marj:.1f}", f"%{s3_marj:.1f}", f"%{s4_marj:.1f}"]
+                toplu_liste.append({
+                    "Ürün İsmi": urun_ismi,
+                    "Barkod": barkod,
+                    "Beden": beden,
+                    "Stok": stok,
+                    "Maliyet": maliyet,
+                    "1. Fiyat (TL)": f1,
+                    "1. Kom %": f"%{k1*100:.1f}",
+                    "1. Net Kâr (TL)": kar1,
+                    "2. Fiyat (TL)": f2,
+                    "2. Kom %": f"%{k2*100:.1f}",
+                    "2. Net Kâr (TL)": kar2,
+                    "3. Fiyat (TL)": f3,
+                    "3. Kom %": f"%{k3*100:.1f}",
+                    "3. Net Kâr (TL)": kar3,
+                    "4. Fiyat (TL)": f4,
+                    "4. Kom %": f"%{k4*100:.1f}",
+                    "4. Net Kâr (TL)": kar4,
                 })
                 
-                st.dataframe(sim_tablo, use_container_width=True, hide_index=True)
+            df_sonuc = pd.DataFrame(toplu_liste)
+            
+            # Filtreleme alanı ekleyelim
+            Arama = st.text_input("🔍 Ürün Adı veya Barkoda Göre Hızlı Filtrele")
+            if Arama:
+                df_sonuc = df_sonuc[df_sonuc['Ürün İsmi'].str.contains(Arama, case=False, na=False) | df_sonuc['Barkod'].str.contains(Arama, case=False, na=False)]
                 
-                en_iyi_kar = max(s1_kar, s2_kar, s3_kar, s4_kar)
-                st.success(f"🎯 Bu ürün için en yüksek net kâr (**{en_iyi_kar:,.2f} ₺**) yukarıdaki aralıklardan en karlı olan fiyatta elde edilir.")
-                
+            st.dataframe(df_sonuc, use_container_width=True, hide_index=True)
+            
         except Exception as e:
-            st.error(f"Excel dosyası okunurken hata oluştu: {e}")
+            st.error(f"Excel işlenirken hata oluştu: {e}")
     else:
-        st.info("💡 Başlamak için lütfen yukarıdan Trendyol'dan indirdiğiniz komisyon tarifeleri Excel dosyanızı yükleyin.")
+        st.info("💡 Başlamak için lütfen Trendyol'dan indirdiğiniz komisyon tarifeleri Excel dosyanızı yükleyin.")
