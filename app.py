@@ -156,10 +156,8 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
         siparis_tarih_ms = siparis.get("orderDate")
         
         if siparis_tarih_ms:
-            utc_dt = datetime.fromtimestamp(siparis_tarih_ms / 1000.0, tz=timezone.utc)
-            siparis_dt = datetime(utc_dt.year, utc_dt.month, utc_dt.day, 
-                                  utc_dt.hour, utc_dt.minute, utc_dt.second, 
-                                  utc_dt.microsecond, tzinfo=TR_TZ)
+            # 🎯 DÜZELTME: Doğrudan Türkiye Saat Dilimine (TR_TZ) çevriliyor (3 saatlik kayma önlendi)
+            siparis_dt = datetime.fromtimestamp(siparis_tarih_ms / 1000.0, tz=TR_TZ)
             
             if periyot == "Bugün (Canlı)":
                 if siparis_dt < baslangic_dt:
