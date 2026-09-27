@@ -79,12 +79,12 @@ def siparisleri_getir(baslangic_dt, bitis_dt):
     url = f"https://api.trendyol.com/sapigw/suppliers/{SUPPLIER_ID}/orders"
     tum_siparisler = []
     
-    # 🎯 KRİTİK DÜZELTME: Ağı ±3 saat genişletiyoruz!
-    # API, CreatedDate (sisteme düşme) bazlı çalışır. Sınırda (gece yarısı) kalan 
-    # siparişleri API'den kaçırmamak için zaman aralığını genişletiyoruz.
-    # Gerçek sipariş zamanı filtresini performansi_hesapla'da Python (orderDate) ile yapacağız.
-    api_baslangic = baslangic_dt - timedelta(hours=3)
-    api_bitis = bitis_dt + timedelta(hours=3)
+    # 🎯 KRİTİK DÜZELTME 2: Ağı ±24 saat genişletiyoruz!
+    # API, siparişleri CreatedDate'e (Trendyol'a düşme anı) göre getirir. 
+    # Müşterinin sipariş verdiği saat (orderDate) ile sistem onayı (CreatedDate) 
+    # arasında gün kaymaları olabilir. Hepsini yakalamak için 1 gün öncesi ve sonrasını tarayalım.
+    api_baslangic = baslangic_dt - timedelta(hours=24)
+    api_bitis = bitis_dt + timedelta(hours=24)
     
     mevcut_bas = api_baslangic
     while mevcut_bas < api_bitis:
@@ -167,7 +167,6 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
             siparis_dt = datetime.fromtimestamp(siparis_tarih_ms / 1000.0, tz=TR_TZ)
             
             # 🎯 Python Tarafında Hassas Filtreleme
-            # API'den ±3 saat fazladan çektiğimiz siparişleri burada eledik.
             if periyot == "Bugün (Canlı)":
                 if siparis_dt < baslangic_dt:
                     continue
@@ -176,6 +175,10 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
                     continue
                 
         status = siparis.get("status")
+        # DİKKAT: Sadece net gerçekleşenleri hesaplıyoruz.
+        # Eğer Trendyol panelindeki "Brüt Satış" (İptaller dahil) rakamını görmek istersen
+        # bu if bloğunu kaldırman veya ayrıca sayman gerekir. 
+        # Şu anki mantıkta "Net Satış" ve Kârlılığa odaklanıyoruz.
         if status in ["Cancelled", "UnSupplied"]:
             continue
             
@@ -304,9 +307,9 @@ with sekme1:
             st.markdown("### 📊 Genel Özet")
             kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
             
-            kpi1.metric("📦 Sipariş Adedi", f"{ozet['net_siparis_adedi']}")
+            kpi1.metric("📦 Sipariş Adedi (Net)", f"{ozet['net_siparis_adedi']}")
             kpi2.metric("🛍️ Satılan Ürün", f"{ozet['satilan_urun_adedi']}")
-            kpi3.metric("💳 Brüt Ciro", f"{ozet['brut_ciro']:,.2f} ₺", help="Müşterinin ödediği toplam tutar")
+            kpi3.metric("💳 Brüt Ciro (Net Siparişlerden)", f"{ozet['brut_ciro']:,.2f} ₺", help="İptaller HARİÇ geçerli siparişlerin toplam tutarı")
             kpi4.metric("🏦 Hesaba Yatacak", f"{ozet['net_siparis_tutari']:,.2f} ₺", help="Trendyol kesintileri sonrası bankanıza gelecek para")
             kpi5.metric("💰 NET KÂR", f"{ozet['net_kar']:,.2f} ₺", help="Hesaba yatacak tutar eksi ürün alış maliyetiniz")
             
@@ -353,46 +356,38 @@ with sekme2:
                 kategori = str(row.get('KATEGORİ', '-'))
                 stok = row.get('STOK', 0)
                 
-                # Arama filtresi kontrolü
                 if arama_metni:
                     if arama_metni.lower() not in urun_ismi.lower() and arama_metni.lower() not in barkod.lower() and arama_metni.lower() not in kategori.lower():
                         continue
                 
-                # Maliyet tespiti
                 maliyet = 0.0
                 if barkod in URUN_MALIYETLERI:
                     maliyet = URUN_MALIYETLERI[barkod]["maliyet"]
                 
                 guncel_tsf = float(row.get('GÜNCEL TSF', 0))
                 
-                # 4 Fiyat Kademesi ve Komisyonları
                 fiyatlar = []
                 komisyonlar = []
                 
-                # 1. Kademe
                 f1 = float(row.get('KOMİSYONA ESAS FİYAT', guncel_tsf))
                 k1 = float(row.get('1.KOMİSYON', 0)) / 100.0
                 fiyatlar.append(f1); komisyonlar.append(k1)
                 
-                # 2. Kademe
                 f2 = float(row.get('2.Fiyat Alt Limit', 0))
                 k2 = float(row.get('2.KOMİSYON', 0)) / 100.0
                 if f2 > 0:
                     fiyatlar.append(f2); komisyonlar.append(k2)
                 
-                # 3. Kademe
                 f3 = float(row.get('3.Fiyat Alt Limit', 0))
                 k3 = float(row.get('3.KOMİSYON', 0)) / 100.0
                 if f3 > 0:
                     fiyatlar.append(f3); komisyonlar.append(k3)
                 
-                # 4. Kademe
                 f4 = float(row.get('4.Fiyat Üst Limiti', 0))
                 k4 = float(row.get('4.KOMİSYON', 0)) / 100.0
                 if f4 > 0:
                     fiyatlar.append(f4); komisyonlar.append(k4)
                 
-                # Her kademe için kâr hesapla
                 kademe_sonuclari = []
                 for i, (f, k) in enumerate(zip(fiyatlar, komisyonlar)):
                     if f <= 0:
@@ -412,10 +407,8 @@ with sekme2:
                 if not kademe_sonuclari:
                     continue
                 
-                # En yüksek kârı veren kademeyi bul
                 en_iyi_kademe = max(kademe_sonuclari, key=lambda x: x["kar"])
                 
-                # --- ÜRÜN KARTI GÖRSELLEŞTİRME ---
                 with st.container(border=True):
                     c1, c2, c3 = st.columns([3, 1, 1])
                     with c1:
@@ -428,7 +421,6 @@ with sekme2:
                     
                     st.markdown("---")
                     
-                    # 4 Kademe için Yan Yana Görsel Kolonlar
                     kolonlar = st.columns(len(kademe_sonuclari))
                     for col, res in zip(kolonlar, kademe_sonuclari):
                         with col:
