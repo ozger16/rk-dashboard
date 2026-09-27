@@ -79,11 +79,18 @@ def siparisleri_getir(baslangic_dt, bitis_dt):
     url = f"https://api.trendyol.com/sapigw/suppliers/{SUPPLIER_ID}/orders"
     tum_siparisler = []
     
-    mevcut_bas = baslangic_dt
-    while mevcut_bas < bitis_dt:
+    # 🎯 KRİTİK DÜZELTME: Ağı ±3 saat genişletiyoruz!
+    # API, CreatedDate (sisteme düşme) bazlı çalışır. Sınırda (gece yarısı) kalan 
+    # siparişleri API'den kaçırmamak için zaman aralığını genişletiyoruz.
+    # Gerçek sipariş zamanı filtresini performansi_hesapla'da Python (orderDate) ile yapacağız.
+    api_baslangic = baslangic_dt - timedelta(hours=3)
+    api_bitis = bitis_dt + timedelta(hours=3)
+    
+    mevcut_bas = api_baslangic
+    while mevcut_bas < api_bitis:
         mevcut_bit = mevcut_bas + timedelta(days=14)
-        if mevcut_bit > bitis_dt:
-            mevcut_bit = bitis_dt
+        if mevcut_bit > api_bitis:
+            mevcut_bit = api_bitis
             
         start_ms = int(mevcut_bas.timestamp() * 1000)
         end_ms = int(mevcut_bit.timestamp() * 1000)
@@ -156,9 +163,11 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
         siparis_tarih_ms = siparis.get("orderDate")
         
         if siparis_tarih_ms:
-            # 🎯 DÜZELTME: Doğrudan Türkiye Saat Dilimine (TR_TZ) çevriliyor (3 saatlik kayma önlendi)
+            # Doğrudan Türkiye Saat Dilimine çevriliyor
             siparis_dt = datetime.fromtimestamp(siparis_tarih_ms / 1000.0, tz=TR_TZ)
             
+            # 🎯 Python Tarafında Hassas Filtreleme
+            # API'den ±3 saat fazladan çektiğimiz siparişleri burada eledik.
             if periyot == "Bugün (Canlı)":
                 if siparis_dt < baslangic_dt:
                     continue
