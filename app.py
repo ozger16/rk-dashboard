@@ -47,7 +47,6 @@ def maliyetleri_excelden_al(dosya_yolu="maliyetler.xlsx"):
             }
         return urun_maliyetleri
     except Exception as e:
-        st.error(f"Excel Okuma Hatası: {e}. Lütfen maliyetler.xlsx dosyasını kontrol edin.")
         return {}
 
 def get_timestamps(periyot, baslangic_tarihi=None, bitis_tarihi=None):
@@ -236,8 +235,7 @@ def performansi_hesapla(baslangic_dt, bitis_dt, periyot, urun_maliyetleri):
 
 URUN_MALIYETLERI = maliyetleri_excelden_al("maliyetler.xlsx")
 
-# Sekme Yapısı Oluşturuyoruz
-sekme1, sekme2 = st.tabs(["📊 Canlı Performans Paneli", "💡 Fiyat & Komisyon Simülatörü"])
+sekme1, sekme2 = st.tabs(["📊 Canlı Performans Paneli", "💡 Trendyol Fiyat & Komisyon Simülatörü"])
 
 with sekme1:
     col_baslik, col_buton = st.columns([4, 1])
@@ -320,81 +318,89 @@ with sekme1:
         st.warning("Lütfen maliyetler.xlsx dosyanızı hazırlayın.")
 
 # ==========================================
-# 3. YENİ EKLENEN: FİYAT SİMÜLATÖRÜ SEKMESİ
+# 3. TRENDYOL KOMİSYON EXCELİ DESTEKLİ SİMÜLATÖR
 # ==========================================
 with sekme2:
-    st.title("💡 Fiyat & Komisyon Simülatörü")
-    st.markdown("Farklı fiyat aralıkları ve komisyon oranlarını test ederek **net kârınızı** anlık olarak hesaplayın[cite: 15].")
+    st.title("💡 Trendyol Fiyat & Komisyon Simülatörü")
+    st.markdown("Trendyol'dan indirdiğiniz **Komisyon Tarifeleri** Excel dosyasını yükleyerek tüm fiyat aralıklarını ve net kârınızı otomatik simüle edin.")
     
-    if URUN_MALIYETLERI:
-        col_secim, col_bos = st.columns([2, 2])
-        with col_secim:
-            secilen_barkod = st.selectbox("Simülasyon Yapılacak Ürünü Seçin (Barkod)", list(URUN_MALIYETLERI.keys()))
-        
-        if secilen_barkod:
-            urun_bilgi = URUN_MALIYETLERI[secilen_barkod]
-            maliyet = urun_bilgi["maliyet"]
-            varsayilan_komisyon = urun_bilgi["komisyon_orani"] * 100
+    trendyol_excel_dosyasi = st.file_uploader(
+        "Trendyol Komisyon Tarifeleri Excel Dosyasını Yükle (.xlsx)", 
+        type=["xlsx"],
+        key="ty_excel"
+    )
+    
+    if trendyol_excel_dosyasi is not None:
+        try:
+            ty_df = pd.read_excel(trendyol_excel_dosyasi)
+            st.success("✅ Trendyol komisyon raporu başarıyla yüklendi!")
             
-            st.info(f"📦 **Seçilen Ürün Bilgileri:** Alış Maliyeti: **{maliyet:,.2f} ₺** | Kayıtlı Komisyon Oranı: **%{varsayilan_komisyon:.1f}**")
+            # Ürün seçimi
+            barkod_listesi = ty_df['BARKOD'].astype(str).tolist()
+            urun_isimleri = ty_df['ÜRÜN İSMİ'].astype(str).tolist()
+            secenekler = [f"{b} - {i}" for b, i in zip(barkod_listesi, urun_isimleri)]
             
-            st.markdown("---")
-            st.subheader("🔍 Fiyat Senaryoları Karşılaştırması")
+            secilen_secenek = st.selectbox("Simülasyon Yapılacak Ürünü Seçin", secenekler)
             
-            col_s1, col_s2, col_s3 = st.columns(3)
-            
-            with col_s1:
-                st.markdown("#### 1. Fiyat Aralığı")
-                fiyat_1 = st.number_input("Satış Fiyatı (TL) #1", value=799.00, step=10.0)
-                kom_1 = st.number_input("Komisyon Oranı (%) #1", value=varsayilan_komisyon, step=0.5) / 100.0
-            
-            with col_s2:
-                st.markdown("#### 2. Fiyat Aralığı")
-                fiyat_2 = st.number_input("Satış Fiyatı (TL) #2", value=616.00, step=10.0)
-                kom_2 = st.number_input("Komisyon Oranı (%) #2", value=max(varsayilan_komisyon - 1.0, 5.0), step=0.5) / 100.0
-            
-            with col_s3:
-                st.markdown("#### 3. Fiyat Aralığı")
-                fiyat_3 = st.number_input("Satış Fiyatı (TL) #3", value=499.00, step=10.0)
-                kom_3 = st.number_input("Komisyon Oranı (%) #3", value=max(varsayilan_komisyon - 5.0, 5.0), step=0.5) / 100.0
+            if secilen_secenek:
+                secilen_barkod = secilen_secenek.split(" - ")[0]
+                urun_satiri = ty_df[ty_df['BARKOD'].astype(str) == secilen_barkod].iloc[0]
                 
-            st.markdown("---")
-            
-            # Hesaplama Motoru
-            def senaryo_hesapla(fiyat, komisyon_orani):
-                komisyon_tutari = fiyat * komisyon_orani
-                kargo_ve_hizmet = SABIT_KARGO_UCRETI + SABIT_PLATFORM_BEDELI
-                hesaba_yatacak = fiyat - komisyon_tutari - kargo_ve_hizmet
-                net_kar = hesaba_yatacak - maliyet
-                kar_marji = (net_kar / fiyat * 100) if fiyat > 0 else 0
-                return komisyon_tutari, hesaba_yatacak, net_kar, kar_marji
+                # Maliyeti bul
+                maliyet = 0.0
+                if secilen_barkod in URUN_MALIYETLERI:
+                    maliyet = URUN_MALIYETLERI[secilen_barkod]["maliyet"]
+                
+                # Trendyol verilerini çek
+                guncel_tsf = float(urun_satiri.get('GÜNCEL TSF', 0))
+                guncel_kom = float(urun_satiri.get('GÜNCEL KOMİSYON', 0))
+                
+                k1_fiyat = float(urun_satiri.get('KOMİSYONA ESAS FİYAT', guncel_tsf))
+                k1_kom = float(urun_satiri.get('1.KOMİSYON', guncel_kom)) / 100.0
+                
+                k2_fiyat = float(urun_satiri.get('2.Fiyat Alt Limit', guncel_tsf * 0.9))
+                k2_kom = float(urun_satiri.get('2.KOMİSYON', guncel_kom - 1)) / 100.0
+                
+                k3_fiyat = float(urun_satiri.get('3.Fiyat Alt Limit', guncel_tsf * 0.8))
+                k3_kom = float(urun_satiri.get('3.KOMİSYON', guncel_kom - 2)) / 100.0
+                
+                k4_fiyat = float(urun_satiri.get('4.Fiyat Üst Limiti', guncel_tsf * 0.7))
+                k4_kom = float(urun_satiri.get('4.KOMİSYON', guncel_kom - 3)) / 100.0
+                
+                st.markdown("---")
+                st.info(f"📦 **Ürün:** {urun_satiri.get('ÜRÜN İSMİ')} | **Mevcut Alış Maliyeti:** **{maliyet:,.2f} ₺** (Eğer maliyet girilmediyse 0 alınır)")
+                
+                st.subheader("📊 Trendyol Fiyat Aralıkları ve Kâr Simülasyonu")
+                
+                def hesapla(fiyat, kom_orani):
+                    kom_tutar = fiyat * kom_orani
+                    hizmet = SABIT_KARGO_UCRETI + SABIT_PLATFORM_BEDELI
+                    yatacak = fiyat - kom_tutar - hizmet
+                    net_k = yatacak - maliyet
+                    marj = (net_k / fiyat * 100) if fiyat > 0 else 0
+                    return kom_tutar, yatacak, net_k, marj
 
-            s1_kom, s1_yatacak, s1_kar, s1_marj = senaryo_hesapla(fiyat_1, kom_1)
-            s2_kom, s2_yatacak, s2_kar, s2_marj = senaryo_hesapla(fiyat_2, kom_2)
-            s3_kom, s3_yatacak, s3_kar, s3_marj = senaryo_hesapla(fiyat_3, kom_3)
-            
-            simulasyon_tablosu = pd.DataFrame({
-                "Senaryo": ["1. Senaryo", "2. Senaryo", "3. Senaryo"],
-                "Satış Fiyatı (TL)": [fiyat_1, fiyat_2, fiyat_3],
-                "Komisyon Kesintisi (TL)": [round(s1_kom, 2), round(s2_kom, 2), round(s3_kom, 2)],
-                "Kargo & Hizmet (TL)": [SABIT_KARGO_UCRETI + SABIT_PLATFORM_BEDELI, SABIT_KARGO_UCRETI + SABIT_PLATFORM_BEDELI, SABIT_KARGO_UCRETI + SABIT_PLATFORM_BEDELI],
-                "Hesaba Yatacak (TL)": [round(s1_yatacak, 2), round(s2_yatacak, 2), round(s3_yatacak, 2)],
-                "Ürün Maliyeti (TL)": [maliyet, maliyet, maliyet],
-                "Net Kâr (TL)": [round(s1_kar, 2), round(s2_kar, 2), round(s3_kar, 2)],
-                "Kâr Marjı (%)": [f"%{s1_marj:.1f}", f"%{s2_marj:.1f}", f"%{s3_marj:.1f}"]
-            })
-            
-            st.dataframe(simulasyon_tablosu, use_container_width=True, hide_index=True)
-            
-            # En karlı senaryoyu öner
-            en_yuksek_kar = max(s1_kar, s2_kar, s3_kar)
-            if en_yuksek_kar == s1_kar:
-                onerilen = "1. Senaryo"
-            elif en_yuksek_kar == s2_kar:
-                onerilen = "2. Senaryo"
-            else:
-                onerilen = "3. Senaryo"
+                s1_kom, s1_yat, s1_kar, s1_marj = hesapla(k1_fiyat, k1_kom)
+                s2_kom, s2_yat, s2_kar, s2_marj = hesapla(k2_fiyat, k2_kom)
+                s3_kom, s3_yat, s3_kar, s3_marj = hesapla(k3_fiyat, k3_kom)
+                s4_kom, s4_yat, s4_kar, s4_marj = hesapla(k4_fiyat, k4_kom)
                 
-            st.success(f"🎯 **Simülasyon Sonucu:** Bu ürün için en yüksek net kârı (**{en_yuksek_kar:,.2f} ₺**) **{onerilen}** ile elde edersiniz.")
+                sim_tablo = pd.DataFrame({
+                    "Aralık / Senaryo": ["1. Fiyat Aralığı", "2. Fiyat Aralığı", "3. Fiyat Aralığı", "4. Fiyat Aralığı"],
+                    "Satış Fiyatı (TL)": [k1_fiyat, k2_fiyat, k3_fiyat, k4_fiyat],
+                    "Komisyon Oranı": [f"%{k1_kom*100:.1f}", f"%{k2_kom*100:.1f}", f"%{k3_kom*100:.1f}", f"%{k4_kom*100:.1f}"],
+                    "Komisyon Kesintisi (TL)": [round(s1_kom, 2), round(s2_kom, 2), round(s3_kom, 2), round(s4_kom, 2)],
+                    "Hesaba Yatacak (TL)": [round(s1_yat, 2), round(s2_yat, 2), round(s3_yat, 2), round(s4_yat, 2)],
+                    "Net Kâr (TL)": [round(s1_kar, 2), round(s2_kar, 2), round(s3_kar, 2), round(s4_kar, 2)],
+                    "Kâr Marjı": [f"%{s1_marj:.1f}", f"%{s2_marj:.1f}", f"%{s3_marj:.1f}", f"%{s4_marj:.1f}"]
+                })
+                
+                st.dataframe(sim_tablo, use_container_width=True, hide_index=True)
+                
+                en_iyi_kar = max(s1_kar, s2_kar, s3_kar, s4_kar)
+                st.success(f"🎯 Bu ürün için en yüksek net kâr (**{en_iyi_kar:,.2f} ₺**) yukarıdaki aralıklardan en karlı olan fiyatta elde edilir.")
+                
+        except Exception as e:
+            st.error(f"Excel dosyası okunurken hata oluştu: {e}")
     else:
-        st.warning("Lütfen simülasyon yapabilmek için önce maliyetler.xlsx dosyanızı ekleyin.")
+        st.info("💡 Başlamak için lütfen yukarıdan Trendyol'dan indirdiğiniz komisyon tarifeleri Excel dosyanızı yükleyin.")
