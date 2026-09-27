@@ -1,7 +1,9 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timedelta, time, timezone
+import time
+import datetime as dt
+from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
 from streamlit_autorefresh import st_autorefresh
@@ -67,8 +69,8 @@ def get_timestamps(periyot, baslangic_tarihi=None, bitis_tarihi=None):
         baslangic = (su_an - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
         bitis = su_an + timedelta(minutes=5)
     elif periyot == "Özel Tarih" and baslangic_tarihi and bitis_tarihi:
-        baslangic = datetime.combine(baslangic_tarihi, time.min).replace(tzinfo=TR_TZ)
-        bitis = datetime.combine(bitis_tarihi, time.max).replace(tzinfo=TR_TZ)
+        baslangic = datetime.combine(baslangic_tarihi, dt.time.min).replace(tzinfo=TR_TZ)
+        bitis = datetime.combine(bitis_tarihi, dt.time.max).replace(tzinfo=TR_TZ)
     else:
         baslangic = su_an.replace(hour=0, minute=0, second=0, microsecond=0)
         bitis = su_an + timedelta(minutes=5)
